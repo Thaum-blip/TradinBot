@@ -1,76 +1,100 @@
 import ccxt
-import os
-from dotenv import load_dotenv
 import time
-import pandas as pd
-import ta  # technical analysis lib
+from dotenv import load_dotenv
+import os
 
+# Charger les variables d'environnement
 load_dotenv()
-API_KEY = os.getenv('API_KEY')
-SECRET_KEY = os.getenv('SECRET_KEY')
 
+API_KEY = os.getenv("API_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+# Initialisation de l'exchange
 def init_exchange():
     exchange = ccxt.binance({
         'apiKey': API_KEY,
         'secret': SECRET_KEY,
-        'enableRateLimit': True,
         'options': {'defaultType': 'spot'},
     })
-    exchange.set_sandbox_mode(True)
+    exchange.set_sandbox_mode(True)  # Utiliser le mode sandbox pour éviter les risques
     return exchange
 
-def fetch_ohlcv(exchange, symbol='BTC/USDT', timeframe='1m', limit=100):
-    bars = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    return df
+# Afficher les détails de l'ordre
+def afficher_details_ordre(order):
+    try:
+        symbole = order.get('symbol', 'N/A')
+        type_ordre = order.get('type', 'N/A')
+        montant = order.get('amount', 'N/A')
+        prix_moyen = order.get('average', 'N/A')
+        cout_total = order.get('cost', 'N/A')
+        statut = order.get('status', 'N/A')
+        commission = order.get('fee', {}).get('cost', 0.0)
+        commission_devise = order.get('fee', {}).get('currency', 'N/A')
 
-def apply_indicators(df):
-    df['ma7'] = df['close'].rolling(window=7).mean()
-    df['ma25'] = df['close'].rolling(window=25).mean()
-    df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-    return df
+        print("\n=== Détails de l'ordre ===")
+        print(f"Symbole : {symbole}")
+        print(f"Type d'ordre : {type_ordre}")
+        print(f"Montant : {montant}")
+        print(f"Prix moyen : {prix_moyen} USDT")
+        print(f"Coût total : {cout_total} USDT")
+        print(f"Commission : {commission} {commission_devise}")
+        print(f"Statut : {statut}")
+        print("==========================\n")
 
-def check_signals(df):
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    except Exception as e:
+        print(f"Erreur lors de l'affichage des détails de l'ordre : {e}")
 
-    # Cross MA7 crossing MA25 upward => buy signal
-    buy_signal = (prev['ma7'] < prev['ma25']) and (last['ma7'] > last['ma25']) and (last['rsi'] < 70)
-
-    # Cross MA7 crossing MA25 downward => sell signal or RSI > 70
-    sell_signal = ((prev['ma7'] > prev['ma25']) and (last['ma7'] < last['ma25'])) or (last['rsi'] > 70)
-
-    return buy_signal, sell_signal
-
-def main():
-    exchange = init_exchange()
-    symbol = 'BTC/USDT'
-    position = None
-
+# Fonction principale du bot de scalping
+def scalping_bot(exchange, symbole, montant, prix_achat_cible, prix_vente_cible):
     while True:
-        df = fetch_ohlcv(exchange, symbol)
-        df = apply_indicators(df)
-        buy_signal, sell_signal = check_signals(df)
+        try:
+            ticker = exchange.fetch_ticker(symbole)
+            prix_actuel = ticker['last']
+            print(f"Prix actuel : {prix_actuel} USDT")
 
-        price = df['close'].iloc[-1]
-        print(f"Prix: {price:.2f}, Buy signal: {buy_signal}, Sell signal: {sell_signal}")
+            if prix_actuel <= prix_achat_cible:
+                print("Prix cible d'achat atteint ! Passons un ordre d'achat.")
+                order = exchange.create_order(
+                    symbol=symbole,
+                    type="market",
+                    side="buy",
+                    amount=montant,
+                )
+                afficher_details_ordre(order)
+                print("Achat effectué, en attente du prix de vente cible...\n")
 
-        if position is None and buy_signal:
-            print("Signal achat détecté - Achat 0.001 BTC")
-            order = exchange.create_market_buy_order(symbol, 0.001)
-            print("Ordre d'achat:", order)
-            position = 'long'
+                while True:
+                    ticker = exchange.fetch_ticker(symbole)
+                    prix_actuel = ticker['last']
+                    print(f"Prix actuel : {prix_actuel} USDT")
 
-        elif position == 'long' and sell_signal:
-            print("Signal vente détecté - Vente 0.001 BTC")
-            order = exchange.create_market_sell_order(symbol, 0.001)
-            print("Ordre de vente:", order)
-            position = None
-        else:
-            print("Pas d'action, on attend...")
+                    if prix_actuel >= prix_vente_cible:
+                        print("Prix cible de vente atteint ! Passons un ordre de vente.")
+                        order = exchange.create_order(
+                            symbol=symbole,
+                            type="market",
+                            side="sell",
+                            amount=montant,
+                        )
+                        afficher_details_ordre(order)
+                        print("Vente effectuée. Prêt pour une nouvelle opportunité.\n")
+                        break
 
-        time.sleep(60)  # Attendre 1 minute avant prochain check
+                    time.sleep(2)
 
+            time.sleep(2)
+
+        except Exception as e:
+            print(f"Erreur dans le bot : {e}")
+            time.sleep(5)
+
+# Lancer le bot
 if __name__ == "__main__":
-    main()
+    exchange = init_exchange()
+    symbole = "BTC/USDT"
+    montant = 0.001  # Quantité de BTC à acheter/vendre
+    prix_achat_cible = 108000  # Modifier selon tes critères
+    prix_vente_cible = 109000  # Modifier selon tes critères
+
+    print("Bot de scalping démarré !")
+    scalping_bot(exchange, symbole, montant, prix_achat_cible, prix_vente_cible)
