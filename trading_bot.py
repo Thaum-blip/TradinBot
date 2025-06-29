@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 import ccxt
 
-load_dotenv()  # charge les variables depuis .env
+load_dotenv()  # charge les variables depuis .env et c'est sécurisé ducoup
 
 def init_exchange(api_key, secret_key):
     api_key = os.getenv("API_KEY")
