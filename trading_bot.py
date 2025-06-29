@@ -1,9 +1,16 @@
+import os
+from dotenv import load_dotenv
 import ccxt
 
-def init_exchange(api_key, secret_key):
+load_dotenv()  # charge les variables depuis .env
+
+def init_exchange():
+    api_key = os.getenv("API_KEY")
+    secret_key = os.getenv("API_SECRET")
+
     exchange = ccxt.binance({
-        'apiKey': "fRsOHjbpLf5c5NCZ6Ryzvrzpi2pvHH6N9eN37qHRxernNfb5WlC1NUvHGrraoIde",
-        'secret': "LPxscXXA6lKKNdXU2mlYE8Xa2YomxLS7ZTYVYm0xV4dzoSW52I6LDcukLi42teMU",
+        'apiKey': api_key,
+        'secret': secret_key,
         'options': {'defaultType': 'spot'},
     })
     exchange.set_sandbox_mode(True)
