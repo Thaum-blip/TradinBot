@@ -1,73 +1,67 @@
 import ccxt
+import time
 from dotenv import load_dotenv
 import os
 
+# Charger les clés API depuis le fichier .env
+load_dotenv()
+API_KEY = os.getenv("API_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
+
 def init_exchange():
-    load_dotenv()  # charge les variables depuis le fichier .env
-    api_key = os.getenv('API_KEY')
-    secret_key = os.getenv('SECRET_KEY')
-
-    if not api_key or not secret_key:
-        print("Erreur : API_KEY ou SECRET_KEY non trouvées dans le fichier .env")
-        exit(1)
-
     exchange = ccxt.binance({
-        'apiKey': api_key,
-        'secret': secret_key,
+        'apiKey': API_KEY,
+        'secret': SECRET_KEY,
         'options': {'defaultType': 'spot'},
     })
-    exchange.set_sandbox_mode(True)  # mode testnet activé
+    exchange.set_sandbox_mode(True)  # Mode test
     return exchange
 
-def print_balance(exchange):
+def afficher_solde(exchange):
     balance = exchange.fetch_balance()
-    print("\n--- Solde Spot ---")
-    for coin, info in balance['total'].items():
-        if info > 0:
-            print(f"{coin}: {info}")
-    print("-----------------\n")
+    btc_balance = balance.get('BTC', {'free': 0, 'total': 0})
+    usdt_balance = balance.get('USDT', {'free': 0, 'total': 0})
+    print("\n=== Solde ===")
+    print(f"BTC : Libre : {btc_balance['free']}, Total : {btc_balance['total']}")
+    print(f"USDT : Libre : {usdt_balance['free']}, Total : {usdt_balance['total']}")
+    print("================\n")
 
-def place_order(exchange, symbol, side, amount):
+def passer_ordre(exchange, symbole, type_ordre, montant):
     try:
-        order = exchange.create_order(symbol, 'market', side, amount)
+        order = exchange.create_order(
+            symbol=symbole,
+            type=type_ordre,
+            side="buy",
+            amount=montant,
+        )
         print("\nOrdre passé avec succès :")
-        print(f"Type: {order['type']}, Côté: {order['side']}")
-        print(f"Montant: {order['amount']}")
-        print(f"Prix moyen: {order['average']}")
-        print(f"Status: {order['status']}\n")
-        return order
+        print(order)
+        print("=========================\n")
     except Exception as e:
-        print("Erreur lors du passage de l'ordre :", e)
-        return None
+        print(f"\nErreur lors du passage de l'ordre : {e}")
+        print("=========================\n")
 
 def main():
-    print("Bienvenue dans ton Trading Bot (testnet spot Binance)\n")
     exchange = init_exchange()
-
-    symbol = "BTC/USDT"  # tu peux changer ici pour la paire que tu veux trader
-
+    
     while True:
         print("Que veux-tu faire ?")
         print("1 - Voir mon solde")
         print("2 - Passer un ordre d'achat")
-        print("3 - Passer un ordre de vente")
-        print("4 - Quitter")
+        print("3 - Quitter")
+        choix = input("Tape le numéro et appuie sur Entrée : ")
 
-        choice = input("Tape le numéro et appuie sur Entrée : ").strip()
-
-        if choice == '1':
-            print_balance(exchange)
-        elif choice == '2':
-            amount = float(input("Combien de BTC veux-tu acheter ? (ex: 0.001) : "))
-            place_order(exchange, symbol, 'buy', amount)
-        elif choice == '3':
-            amount = float(input("Combien de BTC veux-tu vendre ? (ex: 0.001) : "))
-            place_order(exchange, symbol, 'sell', amount)
-        elif choice == '4':
-            print("Au revoir, à bientôt !")
+        if choix == "1":
+            afficher_solde(exchange)
+        elif choix == "2":
+            symbole = input("Quel symbole veux-tu trader ? (ex : BTC/USDT) : ").upper()
+            montant = float(input("Quel montant veux-tu acheter ? (en BTC) : "))
+            passer_ordre(exchange, symbole, "market", montant)
+        elif choix == "3":
+            print("Arrêt du programme.")
             break
         else:
-            print("Choix invalide, recommence.")
+            print("Choix invalide. Réessaie.")
 
 if __name__ == "__main__":
     main()
