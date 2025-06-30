@@ -3,6 +3,7 @@ import time
 import pandas as pd
 from dotenv import load_dotenv
 import os
+import talib  # Pour RSI (il faudra installer : pip install TA-Lib)
 
 load_dotenv()
 
@@ -15,59 +16,45 @@ def init_exchange():
         'secret': SECRET_KEY,
         'options': {'defaultType': 'spot'},
     })
-    exchange.set_sandbox_mode(True)  # à mettre False pour live
+    exchange.set_sandbox_mode(True)
     return exchange
 
 exchange = init_exchange()
 
-def fetch_ohlcv(symbol, timeframe='1m', limit=100):
-    data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+def fetch_ohlcv(symbol, timeframe, limit=50):
+    data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     return df
 
-def add_indicators(df):
-    # EMA rapides et lentes
-    df['EMA7'] = df['close'].ewm(span=7, adjust=False).mean()
-    df['EMA25'] = df['close'].ewm(span=25, adjust=False).mean()
-    
-    # RSI 14
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    RS = gain / loss
-    df['RSI'] = 100 - (100 / (1 + RS))
-    
-    # Bollinger Bands 20, 2 std dev
-    df['MA20'] = df['close'].rolling(window=20).mean()
-    df['stddev'] = df['close'].rolling(window=20).std()
-    df['BB_upper'] = df['MA20'] + (df['stddev'] * 2)
-    df['BB_lower'] = df['MA20'] - (df['stddev'] * 2)
-    
+def calculate_indicators(df):
+    df['SMA_short'] = df['close'].rolling(window=7).mean()
+    df['SMA_long'] = df['close'].rolling(window=25).mean()
+    df['RSI'] = talib.RSI(df['close'], timeperiod=14)
     return df
 
-def check_buy_signal(df):
-    # EMA7 croise au-dessus EMA25 + RSI < 30 + prix <= BB_lower
-    if (df['EMA7'].iloc[-2] <= df['EMA25'].iloc[-2] and
-        df['EMA7'].iloc[-1] > df['EMA25'].iloc[-1] and
-        df['RSI'].iloc[-1] < 30 and
-        df['close'].iloc[-1] <= df['BB_lower'].iloc[-1]):
-        return True
-    return False
+def check_signals(df):
+    # On regarde si SMA_short croise SMA_long à la hausse
+    buy_signal = (df['SMA_short'].iloc[-1] > df['SMA_long'].iloc[-1]) and (df['SMA_short'].iloc[-2] <= df['SMA_long'].iloc[-2])
+    # Et RSI < 70 (pas suracheté)
+    buy_signal = buy_signal and (df['RSI'].iloc[-1] < 70)
 
-def check_sell_signal(df):
-    # EMA7 croise en dessous EMA25 + RSI > 70 + prix >= BB_upper
-    if (df['EMA7'].iloc[-2] >= df['EMA25'].iloc[-2] and
-        df['EMA7'].iloc[-1] < df['EMA25'].iloc[-1] and
-        df['RSI'].iloc[-1] > 70 and
-        df['close'].iloc[-1] >= df['BB_upper'].iloc[-1]):
-        return True
-    return False
+    # Croisement à la baisse
+    sell_signal = (df['SMA_short'].iloc[-1] < df['SMA_long'].iloc[-1]) and (df['SMA_short'].iloc[-2] >= df['SMA_long'].iloc[-2])
+    # Et RSI > 30 (pas survendu)
+    sell_signal = sell_signal and (df['RSI'].iloc[-1] > 30)
 
-def get_balance():
+    if buy_signal:
+        return 'buy'
+    elif sell_signal:
+        return 'sell'
+    else:
+        return None
+
+def get_balances():
     balance = exchange.fetch_balance()
-    usd = balance['total'].get('USDT', 0)
-    btc = balance['total'].get('BTC', 0)
+    usd = balance['free'].get('USDT', 0)
+    btc = balance['free'].get('BTC', 0)
     return usd, btc
 
 def place_order(symbol, side, amount):
@@ -75,46 +62,52 @@ def place_order(symbol, side, amount):
         order = exchange.create_order(symbol, 'market', side, amount)
         return order
     except Exception as e:
-        print(f"Erreur lors de l'ordre {side}: {e}")
+        print(f"Erreur lors de l'exécution de l'ordre : {e}")
         return None
 
-def print_trade_summary(order):
-    usd_balance, btc_balance = get_balance()
-    btc_in_usd = btc_balance * order['price'] if order and 'price' in order else 0
-    total = usd_balance + btc_in_usd
-    print(f"--- {order['side'].upper()} exécuté ---")
-    print(f"Symbol: {order['symbol']} - Amount: {order['amount']} - Prix moyen: {order['price']}")
-    print(f"Solde USDT: {usd_balance:.2f} | BTC: {btc_balance:.6f} (~{btc_in_usd:.2f} USDT) | Total estimé: {total:.2f} USDT")
-    print("----------------------------")
+def print_order_summary(order):
+    if not order:
+        print("Aucun ordre passé.")
+        return
+    print(f"Ordre {order['side'].upper()} passé:")
+    print(f"  Symbole : {order['symbol']}")
+    print(f"  Montant : {order['amount']}")
+    print(f"  Prix moyen : {order['average']}")
+    print(f"  Coût total : {order['cost']}")
+    usd, btc = get_balances()
+    total_in_usd = usd + btc * order['average']
+    print(f"Soldes actuels après ordre:")
+    print(f"  USDT : {usd:.2f}")
+    print(f"  BTC  : {btc:.6f} (~{btc * order['average']:.2f} USDT)")
+    print(f"  Total estimé en USDT : {total_in_usd:.2f}")
 
 def main():
     symbol = 'BTC/USDT'
     timeframe = '1m'
 
+    print("Lancement du scalping bot...")
+
     while True:
         try:
-            df = fetch_ohlcv(symbol, timeframe, limit=100)
-            df = add_indicators(df)
+            df = fetch_ohlcv(symbol, timeframe)
+            df = calculate_indicators(df)
+            signal = check_signals(df)
+            usd_balance, btc_balance = get_balances()
 
-            usd_balance, btc_balance = get_balance()
-            trade_amount_usd = usd_balance * 0.01  # 1% du solde USDT
-            current_price = df['close'].iloc[-1]
-            trade_amount_btc = trade_amount_usd / current_price
+            amount_to_trade = (usd_balance * 0.01) / df['close'].iloc[-1]  # 1% du solde USD converti en BTC
 
-            if check_buy_signal(df) and usd_balance >= trade_amount_usd:
-                order = place_order(symbol, 'buy', trade_amount_btc)
-                if order:
-                    print_trade_summary(order)
-            elif check_sell_signal(df) and btc_balance >= trade_amount_btc:
-                order = place_order(symbol, 'sell', trade_amount_btc)
-                if order:
-                    print_trade_summary(order)
+            if signal == 'buy' and usd_balance > 10:
+                order = place_order(symbol, 'buy', round(amount_to_trade, 6))
+                print_order_summary(order)
+            elif signal == 'sell' and btc_balance > 0.0001:
+                order = place_order(symbol, 'sell', round(btc_balance * 0.01, 6))  # 1% du BTC détenu
+                print_order_summary(order)
+            else:
+                print(f"Aucun signal ou fonds insuffisants. USDT: {usd_balance:.2f}, BTC: {btc_balance:.6f}")
 
-            time.sleep(5)  # 5 sec pour rester dans les limites
-
+            time.sleep(5)  # boucle toutes les 5 secondes
         except Exception as e:
-            print(f"Erreur boucle principale: {e}")
-            time.sleep(5)
+            print(f"Erreur dans la boucle principale : {e}")
 
 if __name__ == "__main__":
     main()
