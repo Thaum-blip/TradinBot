@@ -30,7 +30,7 @@ def get_balance():
 def place_order(symbol, side, amount):
     try:
         order = exchange.create_order(symbol, 'market', side, amount)
-        print(f"Ordre {side} exécuté :")
+        print(f"✅ Ordre {side} exécuté :")
         print({
             'id': order['id'],
             'timestamp': order['timestamp'],
@@ -41,18 +41,63 @@ def place_order(symbol, side, amount):
             'amount': order['amount'],
             'cost': order['cost']
         })
+        return order
     except Exception as e:
-        print(f"Erreur lors de l'exécution de l'ordre : {e}")
+        print(f"❌ Erreur lors de l'exécution de l'ordre : {e}")
+        return None
+
+# Nouveauté : afficher les positions ouvertes
+def show_positions():
+    print("\n📄 Positions ouvertes :")
+    try:
+        # Récupérer tous les ordres ouverts (le proxy ici pour spot, car ccxt spot ne gère pas margin positions)
+        orders = exchange.fetch_open_orders()
+        if not orders:
+            print("Aucune position/ordre ouvert.")
+            return []
+        positions = []
+        for idx, order in enumerate(orders, start=1):
+            symbol = order['symbol']
+            side = order['side']
+            amount = order['amount']
+            price = order['price']
+            positions.append(order)
+            print(f"{idx} – {symbol} | {side.upper()} | qty: {amount} @ {price}")
+        return positions
+    except Exception as e:
+        print(f"⚠️ Erreur position : {e}")
+        return []
+
+# Fermer une position existante
+def close_position(positions):
+    choix = input("\nTape le numéro de la position à fermer (0 pour annuler) : ")
+    if not choix.isdigit() or int(choix) < 0 or int(choix) > len(positions):
+        print("Choix invalide.")
+        return
+    if choix == '0':
+        print("Annulé.")
+        return
+    pos = positions[int(choix) - 1]
+    sym = pos['symbol']
+    amount = pos['amount']
+    side = 'sell' if pos['side'] == 'buy' else 'buy'
+    print(f"🔄 Fermeture de {sym} qty {amount} côté {side.upper()}")
+    order = place_order(sym, side, amount)
+    if order:
+        print("✅ Position fermée.")
+    else:
+        print("❌ Impossible de fermer la position.")
 
 # Menu principal
 def main():
     symbol = 'BTC/USDT'
-
     while True:
-        print("Que veux-tu faire ?")
+        print("\nQue veux-tu faire ?")
         print("1 - Voir mon solde")
         print("2 - Passer un ordre d'achat")
         print("3 - Passer un ordre de vente")
+        print("4 - Voir mes positions ouvertes")
+        print("5 - Fermer une position ouverte")
         choice = input("Tape le numéro et appuie sur Entrée : ")
 
         if choice == '1':
@@ -80,8 +125,16 @@ def main():
                 usd_balance, btc_balance = get_balance()
                 print(f"Nouveau solde : {usd_balance:.2f} USDT, {btc_balance:.6f} BTC")
 
+        elif choice == '4':
+            show_positions()
+
+        elif choice == '5':
+            positions = show_positions()
+            if positions:
+                close_position(positions)
+
         else:
-            print("Choix invalide. Réessaie.")
+            print("Choix invalide.\nRéessaie.")
 
 if __name__ == "__main__":
     main()
