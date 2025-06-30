@@ -51,7 +51,9 @@ def show_positions():
     print("\n📄 Positions ouvertes :")
     try:
         # Récupérer tous les ordres ouverts (le proxy ici pour spot, car ccxt spot ne gère pas margin positions)
-        orders = exchange.fetch_open_orders()
+        symbol = 'BTC/USDT'  # ou un autre symbole selon ce que tu veux afficher
+        orders = exchange.fetch_open_orders(symbol)
+
         if not orders:
             print("Aucune position/ordre ouvert.")
             return []

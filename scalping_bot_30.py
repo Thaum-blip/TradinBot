@@ -3,7 +3,7 @@ import time
 import pandas as pd
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -22,7 +22,8 @@ def init_exchange():
 exchange = init_exchange()
 
 symbol = 'BTC/USDT'
-timeframe = '1m'
+timeframe = '15s'  # Base timeframe for simulation
+simulated_timeframe = 30  # Simulated timeframe in seconds
 short_window = 7
 long_window = 25
 
@@ -30,16 +31,41 @@ trade_log_file = 'trades.log'
 stop_loss_pct = 0.003  # 0.3% stop loss
 take_profit_pct = 0.005  # 0.5% take profit
 
-# Stockage trades pour calcul gain/perte et gestion des positions
+# Stockage trades pour calcul gain/perte
 trade_history = []
-open_positions = []  # Liste des positions ouvertes
-max_trades = 10
 
-def fetch_ohlcv():
-    data = exchange.fetch_ohlcv(symbol, timeframe, limit=50)
-    df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+# Gestion des positions ouvertes
+open_positions = []  # Liste des positions ouvertes
+
+def fetch_trades():
+    trades = exchange.fetch_trades(symbol, limit=100)
+    df = pd.DataFrame(trades)
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df = df[['timestamp', 'price', 'amount']]
     return df
+
+def simulate_ohlcv(trades_df):
+    end_time = trades_df['timestamp'].iloc[-1]
+    start_time = end_time - timedelta(seconds=simulated_timeframe)
+
+    subset = trades_df[(trades_df['timestamp'] > start_time) & (trades_df['timestamp'] <= end_time)]
+    if subset.empty:
+        return None
+
+    open_price = subset['price'].iloc[0]
+    high_price = subset['price'].max()
+    low_price = subset['price'].min()
+    close_price = subset['price'].iloc[-1]
+    volume = subset['amount'].sum()
+
+    return pd.DataFrame([{
+        'timestamp': end_time,
+        'open': open_price,
+        'high': high_price,
+        'low': low_price,
+        'close': close_price,
+        'volume': volume
+    }])
 
 def calculate_moving_averages(df):
     df['SMA_short'] = df['close'].rolling(window=short_window).mean()
@@ -47,7 +73,6 @@ def calculate_moving_averages(df):
     return df
 
 def check_signals(df):
-    # Signal croisement simple des SMA pour entrée/sortie
     if df['SMA_short'].iloc[-1] > df['SMA_long'].iloc[-1] and df['SMA_short'].iloc[-2] <= df['SMA_long'].iloc[-2]:
         return 'buy'
     elif df['SMA_short'].iloc[-1] < df['SMA_long'].iloc[-1] and df['SMA_short'].iloc[-2] >= df['SMA_long'].iloc[-2]:
@@ -74,26 +99,18 @@ def place_order(side, amount):
         return None
 
 def get_position_size(usd_balance):
-    # 1% du solde USD converti en BTC au prix actuel
     ticker = exchange.fetch_ticker(symbol)
     price = ticker['last']
     size = (usd_balance * 0.01) / price
-    # arrondi au lot minimal (ex: 0.0001)
     size = round(size, 6)
     return size
 
-def calculate_ratio():
-    wins = sum(1 for t in trade_history if t['profit'] > 0)
-    losses = sum(1 for t in trade_history if t['profit'] < 0)
-    ratio = wins / losses if losses > 0 else wins
-    return ratio
-
-def manage_positions():
+def monitor_positions():
     global open_positions
     ticker = exchange.fetch_ticker(symbol)
     current_price = ticker['last']
 
-    for position in open_positions[:]:  # Copie de la liste pour éviter modifications en boucle
+    for position in open_positions[:]:
         if position['side'] == 'buy':
             if current_price <= position['stop_loss']:
                 print(f"Stop loss touché pour position LONG. Vente immédiate au prix {current_price}")
@@ -103,6 +120,7 @@ def manage_positions():
                     trade_history.append({'side': 'buy', 'profit': profit})
                     write_log(f"STOP LOSS LONG - VENDU {position['amount']} BTC à {current_price:.2f}, Profit: {profit:.2f} USDT")
                 open_positions.remove(position)
+
             elif current_price >= position['take_profit']:
                 print(f"Take profit touché pour position LONG. Vente au prix {current_price}")
                 order = place_order('sell', position['amount'])
@@ -111,6 +129,7 @@ def manage_positions():
                     trade_history.append({'side': 'buy', 'profit': profit})
                     write_log(f"TAKE PROFIT LONG - VENDU {position['amount']} BTC à {current_price:.2f}, Profit: {profit:.2f} USDT")
                 open_positions.remove(position)
+
         elif position['side'] == 'sell':
             if current_price >= position['stop_loss']:
                 print(f"Stop loss touché pour position SHORT. Achat immédiat au prix {current_price}")
@@ -118,15 +137,16 @@ def manage_positions():
                 if order:
                     profit = (position['price'] - current_price) * position['amount']
                     trade_history.append({'side': 'sell', 'profit': profit})
-                    write_log(f"STOP LOSS SHORT - ACHETÉ {position['amount']} BTC à {current_price:.2f}, Profit: {profit:.2f} USDT")
+                    write_log(f"STOP LOSS SHORT - ACHAT {position['amount']} BTC à {current_price:.2f}, Profit: {profit:.2f} USDT")
                 open_positions.remove(position)
+
             elif current_price <= position['take_profit']:
                 print(f"Take profit touché pour position SHORT. Achat au prix {current_price}")
                 order = place_order('buy', position['amount'])
                 if order:
                     profit = (position['price'] - current_price) * position['amount']
                     trade_history.append({'side': 'sell', 'profit': profit})
-                    write_log(f"TAKE PROFIT SHORT - ACHETÉ {position['amount']} BTC à {current_price:.2f}, Profit: {profit:.2f} USDT")
+                    write_log(f"TAKE PROFIT SHORT - ACHAT {position['amount']} BTC à {current_price:.2f}, Profit: {profit:.2f} USDT")
                 open_positions.remove(position)
 
 def main():
@@ -135,23 +155,29 @@ def main():
 
     while True:
         try:
-            df = fetch_ohlcv()
+            trades_df = fetch_trades()
+            simulated_ohlcv = simulate_ohlcv(trades_df)
+
+            if simulated_ohlcv is None:
+                print("Pas assez de données pour simuler une bougie 30s.")
+                time.sleep(5)
+                continue
+
+            df = pd.concat([pd.DataFrame(simulated_ohlcv)], ignore_index=True)
             df = calculate_moving_averages(df)
             signal = check_signals(df)
 
             usd_balance, btc_balance = fetch_balances()
+            monitor_positions()
 
-            # Gérer les positions ouvertes
-            manage_positions()
-
-            # Si nouvelle opportunité de trade
-            if signal and len(open_positions) < max_trades:
-                size = get_position_size(usd_balance) if signal == 'buy' else btc_balance
+            if signal and signal != last_signal and len(open_positions) < 10:
+                size = get_position_size(usd_balance)
                 if size < 0.0001:
                     print("Taille position trop faible, pas d'ordre.")
                 else:
                     ticker = exchange.fetch_ticker(symbol)
                     current_price = ticker['last']
+
                     if signal == 'buy' and usd_balance >= current_price * size:
                         order = place_order('buy', size)
                         if order:
@@ -160,6 +186,7 @@ def main():
                             open_positions.append({'side': 'buy', 'amount': size, 'price': current_price, 'stop_loss': stop_loss, 'take_profit': take_profit})
                             write_log(f"ACHAT {size} BTC à {current_price:.2f}, SL: {stop_loss:.2f}, TP: {take_profit:.2f}")
                             print(f"Achat effectué : {size} BTC à {current_price:.2f}")
+
                     elif signal == 'sell' and btc_balance >= size:
                         order = place_order('sell', size)
                         if order:
@@ -171,18 +198,7 @@ def main():
 
                 last_signal = signal
 
-            # Affichage solde à chaque boucle
-            usd_balance, btc_balance = fetch_balances()
-            ticker = exchange.fetch_ticker(symbol)
-            total_balance = usd_balance + btc_balance * ticker['last']
-            print(f"Solde USDT: {usd_balance:.2f} | BTC: {btc_balance:.6f} | Total USDT: {total_balance:.2f}")
-
-            # Affichage ratio gain/perte
-            if len(trade_history) > 0:
-                ratio = calculate_ratio()
-                print(f"Ratio gain/perte : {ratio:.2f}")
-
-            time.sleep(5)
+            time.sleep(simulated_timeframe)
 
         except Exception as e:
             print(f"Erreur dans la boucle principale : {e}")
